@@ -1,0 +1,4 @@
+<?jelly escape-by-default='true'?>
+<div>
+    RevBits PAM CI/CD plugin, allows you to fetch and replace credentials automatically during deployment.
+</div>

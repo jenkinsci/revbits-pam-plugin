@@ -1,0 +1,10 @@
+# For IDEs
+.idea
+.vscode
+
+# Github
+.github
+
+# Build directories
+target
+work
