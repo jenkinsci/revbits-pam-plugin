@@ -8,7 +8,7 @@
         <relativePath />
     </parent>
     <groupId>io.jenkins.plugins</groupId>
-    <artifactId>revbitspam</artifactId>
+    <artifactId>revbits-pam</artifactId>
     <version>${revision}</version>
     <packaging>hpi</packaging>
     <properties>
