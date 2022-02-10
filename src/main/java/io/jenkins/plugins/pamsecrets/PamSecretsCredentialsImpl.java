@@ -12,7 +12,7 @@ import java.util.logging.Logger;
 import javax.annotation.CheckForNull;
 
 import io.jenkins.plugins.api.PamAPI;
-import okhttp3.OkHttpClient;
+import io.jenkins.plugins.exceptions.InvalidPamSecretException;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 
@@ -43,7 +43,8 @@ public class PamSecretsCredentialsImpl extends BaseStandardCredentials implement
 
     private String credentialsID;
     private String applianceURL;
-    private String apiKey;
+    private Secret apiKey;
+    private Secret publicKey;
 
     private transient Run<?, ?> context;
 
@@ -78,16 +79,11 @@ public class PamSecretsCredentialsImpl extends BaseStandardCredentials implement
 
         String secret = "";
         try {
+            PamAPI.PamAuthnInfo pamAuthn = new PamAPI.PamAuthnInfo(applianceURL, apiKey, publicKey);
+            secret = PamAPI.getSecretFromApi(pamAuthn, variable);
 
-            OkHttpClient client = PamAPI.getHttpClient();
-            PamAPI.PamAuthnInfo pamAuthn = new PamAPI.PamAuthnInfo(applianceURL, apiKey);
-
-            secret = PamAPI.getSecretFromApi(client, pamAuthn, credentialsId, variable);
-
-        } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "EXCEPTION: " + e.getMessage());
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new InvalidPamSecretException(e.getMessage());
         }
 
         return Secret.fromString(secret);
@@ -111,13 +107,23 @@ public class PamSecretsCredentialsImpl extends BaseStandardCredentials implement
     }
 
     @Override
-    public String getApiKey() {
-        return apiKey;
+    public Secret getApiKey() {
+        return this.apiKey;
     }
 
     @DataBoundSetter
-    public void setApiKey(String apiKey) {
+    public void setApiKey(Secret apiKey) {
         this.apiKey = apiKey;
+    }
+
+    @Override
+    public Secret getPublicKey() {
+        return this.publicKey;
+    }
+
+    @DataBoundSetter
+    public void setPublicKey(Secret publicKey) {
+        this.publicKey = publicKey;
     }
 
 }

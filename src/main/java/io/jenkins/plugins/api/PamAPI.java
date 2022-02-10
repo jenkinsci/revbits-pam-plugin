@@ -1,28 +1,41 @@
 package io.jenkins.plugins.api;
 
-import hudson.model.Run;
-import okhttp3.*;
-import org.json.JSONObject;
-
-import java.io.IOException;
-import java.math.BigInteger;
+import java.io.InputStream;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import com.github.mervick.aes_everywhere.Aes256;
+
+import javax.crypto.Cipher;
+import javax.net.ssl.HttpsURLConnection;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import hudson.util.Secret;
 
 public class PamAPI {
 
+	public static boolean initialized = false;
+
 	public static class PamAuthnInfo {
 		String applianceUrl;
-		String apiKey;
+		Secret apiKey;
+		Secret publicKey;
 
-        public PamAuthnInfo(String applianceUrl, String apiKey) {
+        public PamAuthnInfo(String applianceUrl, Secret apiKey, Secret publicKey) {
             this.applianceUrl = applianceUrl;
             this.apiKey = apiKey;
+            this.publicKey = publicKey;
         }
-                
+	}
+
+	public static class SecretResponse {
+		public byte[] value;
+		public String errorMessage;
 	}
 
 	private static final Logger LOGGER = Logger.getLogger(PamAPI.class.getName());
@@ -32,107 +45,84 @@ public class PamAPI {
 		if (pamAuthn.applianceUrl == null && env.containsKey("REVBITS_APPLIANCE_URL"))
 			pamAuthn.applianceUrl = env.get("REVBITS_APPLIANCE_URL");
 		if (pamAuthn.apiKey == null && env.containsKey("REVBITS_AUTHN_API_KEY"))
-			pamAuthn.apiKey = env.get("REVBITS_AUTHN_API_KEY");
+			pamAuthn.apiKey = Secret.fromString(env.get("REVBITS_AUTHN_API_KEY"));
+		if (pamAuthn.publicKey == null && env.containsKey("REVBITS_AUTHN_PUBLIC_KEY"))
+			pamAuthn.publicKey = Secret.fromString(env.get("REVBITS_AUTHN_PUBLIC_KEY"));
 	}
 
-	public static String getAuthorizationToken(OkHttpClient client, PamAuthnInfo pamAuthn,
-			Run<?, ?> context) throws IOException {
+	public static String getSecretFromApi(PamAuthnInfo pamAuthn, String variable) throws Exception {
+//		Declarations
+		URL url;
+		int status;
+		byte[] pk;
+		byte[] plainText;
 
-		String resultingToken = null;
+//		URL formation
+		String urlString = String.format("%s/api/v1/secretman/getJenkinsSecret/%s", pamAuthn.applianceUrl, variable);
+		url = new URL(urlString);
 
-		if (pamAuthn.apiKey != null) {
-			LOGGER.log(Level.INFO, "Authenticating with RevBits PAM");
+//		Connection
+		HttpsURLConnection con = (HttpsURLConnection) url.openConnection();
 
-			Request request = new Request.Builder()
-					.url(String.format("%s/authenticate", pamAuthn.applianceUrl))
-					.post(RequestBody.create(MediaType.parse("text/plain"), pamAuthn.apiKey)).build();
+		con.setRequestMethod("GET");
+		con.setRequestProperty("apiKey", Secret.toString(pamAuthn.apiKey));
+		LOGGER.log(Level.WARNING, "Connection opened");
 
-			Response response = client.newCall(request).execute();
+//		Response and Data Mapping
+		status = con.getResponseCode();
 
-			resultingToken = Base64.getEncoder().withoutPadding()
-					.encodeToString(response.body().string().getBytes("UTF-8"));
-			LOGGER.log(Level.INFO, () -> "RevBits PAM Authenticate response " + response.code() + " - " + response.message());
+		InputStream responseStream = con.getInputStream();
+		ObjectMapper mapper = new ObjectMapper();
 
-			if (response.code() != 200) {
-				throw new IOException("Error authenticating to RevBits PAM [" + response.code() + " - " + response.message()
-						+ "\n" + resultingToken);
-			}
-		} else {
-			LOGGER.log(Level.INFO, "Failed to find credentials for RevBits RevBits PAM authentication");
-		}
+		SecretResponse sr = mapper.readValue(responseStream, SecretResponse.class);
 
-		return resultingToken;
-	}
-
-
-	public static OkHttpClient getHttpClient() {
-		return new OkHttpClient.Builder().build();
-	}
-
-	public static String getSecretFromApi(OkHttpClient client, PamAuthnInfo pamAuthn,
-								   String credentialsId, String variable) throws IOException, Exception {
-		try {
-			String result = "";
-			long keyA = 0;
-			long keyB = 0;
-
-			long sharedKeyA = 0;
-			long sharedKeyB = 0;
-
-			long prime = 23;
-			long generated = 9;
-
-			long privateKeyA = Math.round(Math.random() * (9 - 2 + 1) + 2);
-			long privateKeyB = Math.round(Math.random() * (9 - 2 + 1) + 2);
-			long publicKeyA = Math.round(Math.pow(generated, privateKeyA) % prime);
-			long publicKeyB = Math.round(Math.pow(generated, privateKeyB) % prime);
-
-			Request request = new Request.Builder().url(
-					String.format("%s/api/v1/secretman/GetSecretV2/%s", pamAuthn.applianceUrl, variable))
-					.get().addHeader("apiKey", pamAuthn.apiKey)
-					.addHeader("publicKeyA", String.valueOf(publicKeyA))
-					.addHeader("publicKeyB", String.valueOf(publicKeyB))
-					.build();
-
-			Response response = client.newCall(request).execute();
-			assert response.body() != null;
-			result = response.body().string();
-
-			if (response.code() != 200) {
-				throw new IOException("Error fetching secret from PAM [" + response.code() + "]");
-			}
-
-			JSONObject obj = new JSONObject(result);
-			if (!obj.getString("value").equals("") &&
-				!obj.isNull("keyA") &&
-				!obj.isNull("keyB")
-			) {
-				result = obj.getString("value");
-				keyA = obj.getLong("keyA");
-				keyB = obj.getLong("keyB");
+//		Verification
+		if (status !=  200) {
+			String error = "Error fetching secret from PAM ";
+			if(sr.errorMessage != null){
+				error += "[ Status: " + status + ", Message: " + sr.errorMessage + " ]";
+				LOGGER.log(Level.WARNING, error);
 			} else {
-				LOGGER.log(Level.WARNING, "Incomplete data or No secret received against variable: " + variable);
+				error += "[ Status: " + status + " ]";
+				LOGGER.log(Level.WARNING, error);
 			}
-
-			sharedKeyA = (long) Math.pow(keyA, privateKeyA) % prime;
-			sharedKeyB = (long) Math.pow(keyB, privateKeyB) % prime;
-
-			BigInteger bSharedKeyA = new BigInteger(String.valueOf(sharedKeyA));
-			BigInteger bSharedKeyB = new BigInteger(String.valueOf(sharedKeyB));
-			BigInteger finalSecret = bSharedKeyA.pow(bSharedKeyB.intValue());
-
-			return Aes256.decrypt(result, String.valueOf(finalSecret));
+			throw new Exception(error);
 		}
-		catch (IOException e){
-			LOGGER.log(Level.INFO, "An exception occurred while fetching credentials.");
-			e.printStackTrace();
-			return "";
+		if (sr.value.length == 0) {
+			LOGGER.log(Level.WARNING, "Incomplete data or No secret received against variable: " + variable);
+			throw new Exception("Incomplete data or No secret received against variable: " + variable);
 		}
+
+//		Decryption
+		Cipher asymmetricCipher = Cipher.getInstance("RSA/NONE/NoPadding", "BC");
+		KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+
+		String publicKey = Secret.toString(pamAuthn.publicKey)
+				.replace("-----BEGIN PUBLIC KEY-----", "")
+				.replace("-----END PUBLIC KEY-----", "")
+				.replaceAll("\r\n", "");
+
+		pk = Base64.getMimeDecoder().decode(publicKey.getBytes(StandardCharsets.UTF_8));
+		X509EncodedKeySpec publicKeySpec = new X509EncodedKeySpec(pk);
+		RSAPublicKey key = (RSAPublicKey) keyFactory.generatePublic(publicKeySpec);
+
+		asymmetricCipher.init(Cipher.DECRYPT_MODE, key);
+
+		plainText = asymmetricCipher.doFinal(sr.value);
+
+		LOGGER.log(Level.INFO, "Received secret from PAM and decrypted successfully.");
+
+		String str = new String(plainText)
+				.replaceAll("�", "")
+				.replaceAll(" ", "")
+				.replaceAll(String.valueOf((char)0), "")
+				.replaceAll(String.valueOf((char)1), "");
+		LOGGER.log(Level.INFO, str);
+
+		return str;
 	}
-
 
 	private PamAPI() {
 		super();
 	}
-
 }

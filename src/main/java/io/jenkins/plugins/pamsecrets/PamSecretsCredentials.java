@@ -37,6 +37,7 @@ public interface PamSecretsCredentials extends StandardCredentials {
     String getNameTag();
     Secret getSecret(String credentialsId, String variable);
     String getApplianceURL();
-    String getApiKey();
+    Secret getApiKey();
+    Secret getPublicKey();
     void setContext(Run<?, ?> context);
 }
