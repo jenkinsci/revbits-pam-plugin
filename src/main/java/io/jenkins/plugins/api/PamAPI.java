@@ -1,17 +1,12 @@
 package io.jenkins.plugins.api;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.security.KeyFactory;
-import java.security.interfaces.RSAPublicKey;
-import java.security.spec.X509EncodedKeySpec;
-import java.util.Base64;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import javax.crypto.Cipher;
 import javax.net.ssl.HttpsURLConnection;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,17 +19,15 @@ public class PamAPI {
 	public static class PamAuthnInfo {
 		String applianceUrl;
 		Secret apiKey;
-		Secret publicKey;
 
-        public PamAuthnInfo(String applianceUrl, Secret apiKey, Secret publicKey) {
+        public PamAuthnInfo(String applianceUrl, Secret apiKey) {
             this.applianceUrl = applianceUrl;
             this.apiKey = apiKey;
-            this.publicKey = publicKey;
         }
 	}
 
 	public static class SecretResponse {
-		public byte[] value;
+		public String value;
 		public String errorMessage;
 	}
 
@@ -46,19 +39,15 @@ public class PamAPI {
 			pamAuthn.applianceUrl = env.get("REVBITS_APPLIANCE_URL");
 		if (pamAuthn.apiKey == null && env.containsKey("REVBITS_AUTHN_API_KEY"))
 			pamAuthn.apiKey = Secret.fromString(env.get("REVBITS_AUTHN_API_KEY"));
-		if (pamAuthn.publicKey == null && env.containsKey("REVBITS_AUTHN_PUBLIC_KEY"))
-			pamAuthn.publicKey = Secret.fromString(env.get("REVBITS_AUTHN_PUBLIC_KEY"));
 	}
 
-	public static String getSecretFromApi(PamAuthnInfo pamAuthn, String variable) throws Exception {
+	public static String getSecretFromApi(PamAuthnInfo pamAuthn, String variable) throws IOException {
 //		Declarations
 		URL url;
 		int status;
-		byte[] pk;
-		byte[] plainText;
 
 //		URL formation
-		String urlString = String.format("%s/api/v1/secretman/getJenkinsSecret/%s", pamAuthn.applianceUrl, variable);
+		String urlString = String.format("%s/api/v1/secretman/getSecretV4/%s", pamAuthn.applianceUrl, variable);
 		url = new URL(urlString);
 
 //		Connection
@@ -66,10 +55,11 @@ public class PamAPI {
 
 		con.setRequestMethod("GET");
 		con.setRequestProperty("apiKey", Secret.toString(pamAuthn.apiKey));
-		LOGGER.log(Level.WARNING, "Connection opened");
+		LOGGER.log(Level.INFO, "Connection opened");
 
 //		Response and Data Mapping
 		status = con.getResponseCode();
+		LOGGER.log(Level.INFO, "API call status: "+status);
 
 		InputStream responseStream = con.getInputStream();
 		ObjectMapper mapper = new ObjectMapper();
@@ -77,49 +67,25 @@ public class PamAPI {
 		SecretResponse sr = mapper.readValue(responseStream, SecretResponse.class);
 
 //		Verification
-		if (status !=  200) {
+		if (status != 200) {
 			String error = "Error fetching secret from PAM ";
-			if(sr.errorMessage != null){
+			LOGGER.log(Level.WARNING, error);
+			if (sr.errorMessage != null) {
 				error += "[ Status: " + status + ", Message: " + sr.errorMessage + " ]";
 				LOGGER.log(Level.WARNING, error);
 			} else {
 				error += "[ Status: " + status + " ]";
 				LOGGER.log(Level.WARNING, error);
 			}
-			throw new Exception(error);
+			LOGGER.log(Level.WARNING, error);
+			throw new IOException(error);
 		}
-		if (sr.value.length == 0) {
+		if (sr.value == null || sr.value.equals("")) {
 			LOGGER.log(Level.WARNING, "Incomplete data or No secret received against variable: " + variable);
-			throw new Exception("Incomplete data or No secret received against variable: " + variable);
+			throw new IOException("Incomplete data or No secret received against variable: " + variable);
 		}
 
-//		Decryption
-		Cipher asymmetricCipher = Cipher.getInstance("RSA/NONE/NoPadding", "BC");
-		KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-
-		String publicKey = Secret.toString(pamAuthn.publicKey)
-				.replace("-----BEGIN PUBLIC KEY-----", "")
-				.replace("-----END PUBLIC KEY-----", "")
-				.replaceAll("\r\n", "");
-
-		pk = Base64.getMimeDecoder().decode(publicKey.getBytes(StandardCharsets.UTF_8));
-		X509EncodedKeySpec publicKeySpec = new X509EncodedKeySpec(pk);
-		RSAPublicKey key = (RSAPublicKey) keyFactory.generatePublic(publicKeySpec);
-
-		asymmetricCipher.init(Cipher.DECRYPT_MODE, key);
-
-		plainText = asymmetricCipher.doFinal(sr.value);
-
-		LOGGER.log(Level.INFO, "Received secret from PAM and decrypted successfully.");
-
-		String str = new String(plainText)
-				.replaceAll("�", "")
-				.replaceAll(" ", "")
-				.replaceAll(String.valueOf((char)0), "")
-				.replaceAll(String.valueOf((char)1), "");
-		LOGGER.log(Level.INFO, str);
-
-		return str;
+		return sr.value;
 	}
 
 	private PamAPI() {

@@ -44,7 +44,6 @@ public class PamSecretsCredentialsImpl extends BaseStandardCredentials implement
     private String credentialsID;
     private String applianceURL;
     private Secret apiKey;
-    private Secret publicKey;
 
     private transient Run<?, ?> context;
 
@@ -79,11 +78,12 @@ public class PamSecretsCredentialsImpl extends BaseStandardCredentials implement
 
         String secret = "";
         try {
-            PamAPI.PamAuthnInfo pamAuthn = new PamAPI.PamAuthnInfo(applianceURL, apiKey, publicKey);
+            PamAPI.PamAuthnInfo pamAuthn = new PamAPI.PamAuthnInfo(applianceURL, apiKey);
             secret = PamAPI.getSecretFromApi(pamAuthn, variable);
 
-        } catch (Exception e) {
-            throw new InvalidPamSecretException(e.getMessage());
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, e.getMessage());
+            throw new InvalidPamSecretException(e.getMessage(), e);
         }
 
         return Secret.fromString(secret);
@@ -115,15 +115,4 @@ public class PamSecretsCredentialsImpl extends BaseStandardCredentials implement
     public void setApiKey(Secret apiKey) {
         this.apiKey = apiKey;
     }
-
-    @Override
-    public Secret getPublicKey() {
-        return this.publicKey;
-    }
-
-    @DataBoundSetter
-    public void setPublicKey(Secret publicKey) {
-        this.publicKey = publicKey;
-    }
-
 }
